@@ -508,7 +508,7 @@ def liftover_df(
     --------
     Basic usage:
     >>> import pandas as pd
-    >>> from liftover_df import liftover_df
+    >>> from sumstats_liftover import liftover_df
     >>> 
     >>> df = pd.DataFrame({
     ...     'CHR': [1, 1, 2],

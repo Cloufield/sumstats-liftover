@@ -36,7 +36,7 @@ pip install -e .
 
 ```python
 import pandas as pd
-from liftover_df import liftover_df
+from sumstats_liftover import liftover_df
 
 # Create a dataframe with genomic coordinates
 df = pd.DataFrame({
@@ -63,7 +63,7 @@ print(result)
 
 ```python
 import pandas as pd
-from liftover_df import liftover_df
+from sumstats_liftover import liftover_df
 
 # Your dataframe with genomic coordinates
 df = pd.DataFrame({
