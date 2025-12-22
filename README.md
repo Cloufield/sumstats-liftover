@@ -255,8 +255,8 @@ If you use this library in your research, please cite:
 ```bibtex
 @software{sumstats-liftover,
   title = {sumstats-liftover: Fast chain-based liftover for pandas DataFrames},
-  author = {Your Name},
-  year = {2024},
+  author = {Yunye He},
+  year = {2025},
   url = {https://github.com/yourusername/sumstats-liftover}
 }
 ```

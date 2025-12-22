@@ -547,6 +547,9 @@ def liftover_df(
       X → 23, Y → 24, M/MT → 25
     - Reverse strand mappings convert coordinates to forward strand
     - Unmapped variants occur when positions fall outside alignment blocks
+    - Multi-hit positions (positions that map to multiple target coordinates) are handled
+      by automatically selecting the highest-scoring segment. Multi-hit is not treated
+      as a failure - the best mapping is always used.
     - This implementation is faster than the original liftover for large datasets
       due to vectorized operations and optimized indexing
     - Non-standard chromosomes (alternate contigs) are filtered out during chain parsing
@@ -589,6 +592,9 @@ def liftover_df(
         idxs_sorted = idxs[order]
 
         # Vectorized interval lookup on best-disjoint cover
+        # When multiple segments overlap at a position (multi-hit), the disjoint cover
+        # already selects the highest-scoring segment, so we always use the best one.
+        # This ensures multi-hit positions are not treated as failures.
         j = np.searchsorted(segs.bt0, p_sorted, side="right") - 1
         ok = (j >= 0) & (p_sorted < segs.bt1[np.maximum(j, 0)])
 
