@@ -4,6 +4,8 @@ Fast chain-based liftover for pandas DataFrames using UCSC chain files.
 
 A standalone, vectorized implementation for lifting over genomic coordinates in pandas DataFrames. This library provides a fast and efficient way to convert genomic coordinates from one genome build (e.g., hg19/GRCh37) to another (e.g., hg38/GRCh38) using UCSC chain files.
 
+**Note**: This module is part of [GWASLab](https://cloufield.github.io/gwaslab/), a comprehensive Python package for processing and visualizing GWAS summary statistics.
+
 ## Features
 
 - **Fast and vectorized**: Optimized for large datasets with efficient numpy-based operations
@@ -256,17 +258,32 @@ Contributions are welcome! Please feel free to submit a Pull Request.
 
 If you use this library in your research, please cite:
 
+**GWASLab** (main package):
+```bibtex
+@article{he2023gwaslab,
+  title = {GWASLab: a Python package for processing and visualizing GWAS summary statistics},
+  author = {He, Yunye and Koido, Masaru and Shimmori, Yoichi and Kamatani, Yoichiro},
+  year = {2023},
+  journal = {Jxiv},
+  doi = {10.51094/jxiv.370},
+  url = {https://doi.org/10.51094/jxiv.370}
+}
+```
+
+**sumstats-liftover** (this module):
 ```bibtex
 @software{sumstats-liftover,
   title = {sumstats-liftover: Fast chain-based liftover for pandas DataFrames},
-  author = {Yunye He},
-  year = {2025},
-  url = {https://github.com/yourusername/sumstats-liftover}
+  author = {He, Yunye},
+  year = {2024},
+  url = {https://github.com/yourusername/sumstats-liftover},
+  note = {Module of GWASLab}
 }
 ```
 
 ## Links
 
+- [GWASLab](https://cloufield.github.io/gwaslab/) - Main package
 - [GitHub Repository](https://github.com/yourusername/sumstats-liftover)
 - [Issue Tracker](https://github.com/yourusername/sumstats-liftover/issues)
 - [UCSC Genome Browser](https://genome.ucsc.edu/)
