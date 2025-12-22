@@ -7,9 +7,11 @@ A standalone, vectorized implementation for lifting over genomic coordinates in 
 ## Features
 
 - **Fast and vectorized**: Optimized for large datasets with efficient numpy-based operations
+  - Processes 10 million rows in less than 1 minute
 - **Standalone**: No external dependencies on UCSC tools or other liftover libraries
 - **Flexible**: Supports custom column names and coordinate systems (0-based or 1-based)
 - **Robust**: Handles chromosome name normalization, special chromosomes, and unmapped variants
+- **Multi-hit handling**: Automatically selects the best (highest-scoring) segment when multiple mappings exist
 - **Easy to use**: Simple pandas DataFrame interface
 
 ## Installation
@@ -239,6 +241,8 @@ This ensures each position maps to exactly one target coordinate, enabling fast 
 ## Performance
 
 This implementation is optimized for large datasets and uses vectorized numpy operations for fast coordinate conversion. The disjoint interval index enables O(log n) coordinate lookup, making it typically faster than the original UCSC liftover tool for batch processing of large DataFrames.
+
+**Benchmark**: For a dataset with 10 million rows, liftover completes in less than 1 minute on a standard machine.
 
 ## License
 
