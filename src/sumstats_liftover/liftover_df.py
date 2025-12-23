@@ -28,6 +28,8 @@ from __future__ import annotations
 
 import gzip
 import heapq
+import os
+import time
 from dataclasses import dataclass
 from typing import Dict, List, Tuple, Optional
 
@@ -147,7 +149,90 @@ def _normalize_chrom_name(chrom: str) -> str:
     return chrom_str
 
 
-def parse_chain_to_segments(chain_path: str) -> Dict[str, Segments]:
+def _normalize_chrom_name_vectorized(chroms: np.ndarray) -> np.ndarray:
+    """
+    Vectorized version of _normalize_chrom_name for numpy arrays.
+    
+    Parameters
+    ----------
+    chroms : np.ndarray
+        Array of chromosome names (can be object dtype with strings)
+    
+    Returns
+    -------
+    np.ndarray
+        Array of normalized chromosome names
+    """
+    # Convert to string array if needed
+    if chroms.dtype != object:
+        chroms = chroms.astype(str)
+    
+    # Use pandas string operations for vectorized processing
+    chrom_series = pd.Series(chroms, dtype=str)
+    
+    # Remove 'chr' prefix (case-insensitive) using vectorized string operations
+    chrom_series = chrom_series.str.replace(r'^[Cc][Hh][Rr]', '', regex=True)
+    
+    # Strip whitespace
+    chrom_series = chrom_series.str.strip()
+    
+    # Convert numeric special chromosomes: 23->X, 24->Y, 25->M
+    chrom_series = chrom_series.replace({"23": "X", "24": "Y", "25": "M"})
+    
+    return chrom_series.to_numpy(dtype=object)
+
+
+def _is_standard_chromosome_vectorized(chroms: np.ndarray) -> np.ndarray:
+    """
+    Vectorized version of _is_standard_chromosome for numpy arrays.
+    
+    Parameters
+    ----------
+    chroms : np.ndarray
+        Array of chromosome names (can be object dtype with strings)
+    
+    Returns
+    -------
+    np.ndarray
+        Boolean array indicating which chromosomes are standard
+    """
+    # Convert to string array if needed
+    if chroms.dtype != object:
+        chroms = chroms.astype(str)
+    
+    chrom_series = pd.Series(chroms, dtype=str)
+    
+    # Remove 'chr' prefix (case-insensitive)
+    chrom_series = chrom_series.str.replace(r'^[Cc][Hh][Rr]', '', regex=True)
+    chrom_series = chrom_series.str.strip()
+    
+    # Define standard chromosomes
+    standard_set = {"1", "2", "3", "4", "5", "6", "7", "8", "9", "10",
+                    "11", "12", "13", "14", "15", "16", "17", "18", "19", "20",
+                    "21", "22", "23", "24", "25",
+                    "X", "Y", "M", "MT", "x", "y", "m", "mt"}
+    
+    # Check if in standard set
+    is_standard = chrom_series.isin(standard_set)
+    
+    # Also check for numeric chromosomes 1-22
+    # Try to convert to int and check if in range 1-22
+    numeric_chroms = pd.to_numeric(chrom_series, errors='coerce')
+    is_numeric_standard = (numeric_chroms >= 1) & (numeric_chroms <= 22)
+    
+    # Combine both checks
+    result = is_standard | is_numeric_standard.fillna(False)
+    
+    return result.to_numpy(dtype=bool)
+
+
+def parse_chain_to_segments(
+    chain_path: str,
+    remove_nonstandard_chromosomes: bool = False,
+    remove_alternative_chromosomes: bool = False,
+    remove_different_chromosomes: bool = False,
+    convert_special_chromosomes: bool = False,
+) -> Dict[str, Segments]:
     """
     Parse a UCSC .chain[.gz] file into per-target-chromosome segments, and build a
     disjoint best-score index for fast point liftover.
@@ -164,6 +249,28 @@ def parse_chain_to_segments(chain_path: str) -> Dict[str, Segments]:
       - header includes qStrand; if '-', query coordinates are on reverse strand
         (UCSC notes you may convert to forward by qStartF=qSize-qEnd, qEndF=qSize-qStart).
     
+    Parameters
+    ----------
+    chain_path : str
+        Path to UCSC chain file (can be .chain or .chain.gz).
+    remove_nonstandard_chromosomes : bool, default False
+        If True, filter out chains involving non-standard chromosomes (alternate contigs,
+        unplaced sequences, etc.) during chain parsing. If False, include them during parsing.
+        Default is False to match UCSC liftOver behavior.
+    remove_alternative_chromosomes : bool, default False
+        If True, filter out chains where the target chromosome (tName) is non-standard.
+        This is similar to remove_nonstandard_chromosomes but specifically targets the
+        output chromosome. Default is False to match UCSC liftOver behavior.
+    remove_different_chromosomes : bool, default False
+        If True, filter out chains where target chromosome (tName) differs from query
+        chromosome (qName). This removes inter-chromosomal mappings.
+        Default is False to match UCSC liftOver behavior.
+    convert_special_chromosomes : bool, default False
+        If True, convert special chromosomes to numeric values in qname:
+        - X/x -> 23, Y/y -> 24, M/m/MT/mt -> 25
+        - Also converts numeric strings (1-25) to integers
+        If False, keeps chromosomes as normalized strings (X, Y, M, etc.)
+    
     Returns
     -------
     Dict[str, Segments]
@@ -172,6 +279,12 @@ def parse_chain_to_segments(chain_path: str) -> Dict[str, Segments]:
         - Original segments (t0, t1, q0, score, qsize, qrev, qname)
         - Disjoint best cover (bt0, bt1, bseg) for fast lookup
     """
+    DEBUG_TIMING = os.environ.get('LIFTOVER_DEBUG_TIMING', '0') == '1'
+    
+    if DEBUG_TIMING:
+        parse_t0 = time.time()
+        file_read_t0 = time.time()
+    
     per_t: Dict[str, List[Tuple[int, int, int, int, int, bool, str]]] = {}
     # stores: (t0, t1, q0, score, qsize, qrev, qname)
 
@@ -204,9 +317,28 @@ def parse_chain_to_segments(chain_path: str) -> Dict[str, Segments]:
             # qEnd = int(parts[11])
             # chain_id = parts[12]
 
+            # Filter chains based on chromosome criteria
+            should_skip = False
+            
             # Filter out non-standard chromosomes (alternate contigs, unplaced sequences, etc.)
-            # Skip chains that involve non-standard chromosomes
-            if not _is_standard_chromosome(tName) or not _is_standard_chromosome(qName):
+            if remove_nonstandard_chromosomes:
+                if not _is_standard_chromosome(tName) or not _is_standard_chromosome(qName):
+                    should_skip = True
+            
+            # Filter out chains where target chromosome is non-standard (alternative chromosomes)
+            if not should_skip and remove_alternative_chromosomes:
+                if not _is_standard_chromosome(tName):
+                    should_skip = True
+            
+            # Filter out chains where target chromosome differs from query chromosome
+            if not should_skip and remove_different_chromosomes:
+                # Normalize chromosome names for comparison
+                tName_norm = _normalize_chrom_name(tName)
+                qName_norm = _normalize_chrom_name(qName)
+                if tName_norm != qName_norm:
+                    should_skip = True
+            
+            if should_skip:
                 # Skip to next chain by reading until blank line
                 while True:
                     blk = fh.readline()
@@ -216,6 +348,27 @@ def parse_chain_to_segments(chain_path: str) -> Dict[str, Segments]:
                 continue
 
             qrev = (qStrand == "-")
+            
+            # Normalize query chromosome name during parsing
+            # Remove 'chr' prefix if present (chain files typically have it)
+            qName_normalized = _normalize_chrom_name(qName)
+            
+            # Convert special chromosomes to numeric if requested (X->23, Y->24, M->25)
+            if convert_special_chromosomes:
+                if qName_normalized in ("X", "x"):
+                    qName_normalized = 23
+                elif qName_normalized in ("Y", "y"):
+                    qName_normalized = 24
+                elif qName_normalized in ("M", "m", "MT", "mt"):
+                    qName_normalized = 25
+                else:
+                    # Try to convert numeric strings to integers
+                    try:
+                        num_val = int(qName_normalized)
+                        if 1 <= num_val <= 25:
+                            qName_normalized = num_val
+                    except (ValueError, TypeError):
+                        pass  # Keep as string if not numeric
 
             # Walk blocks
             t = tStart
@@ -237,7 +390,7 @@ def parse_chain_to_segments(chain_path: str) -> Dict[str, Segments]:
                     t0 = t
                     t1 = t + size
                     q0 = q
-                    per_t.setdefault(tName, []).append((t0, t1, q0, score, qSize, qrev, qName))
+                    per_t.setdefault(tName, []).append((t0, t1, q0, score, qSize, qrev, qName_normalized))
                     # advance to next block
                     t += size + dt
                     q += size + dq
@@ -246,19 +399,25 @@ def parse_chain_to_segments(chain_path: str) -> Dict[str, Segments]:
                     t0 = t
                     t1 = t + size
                     q0 = q
-                    per_t.setdefault(tName, []).append((t0, t1, q0, score, qSize, qrev, qName))
+                    per_t.setdefault(tName, []).append((t0, t1, q0, score, qSize, qrev, qName_normalized))
                     # chain ends (blank line next)
                     break
                 else:
                     raise ValueError(f"Bad alignment line: {blk}")
 
             line = fh.readline()
+    
+    if DEBUG_TIMING:
+        file_read_t1 = time.time()
+        print(f"  Chain file reading: {file_read_t1 - file_read_t0:.3f}s")
+        array_build_t0 = time.time()
 
     # Convert lists -> arrays and build best disjoint cover
     out: Dict[str, Segments] = {}
     for chrom, segs in per_t.items():
-        # Filter out non-standard chromosomes (alternate contigs, unplaced sequences, etc.)
-        if not _is_standard_chromosome(chrom):
+        # Safety check: filter non-standard chromosomes if requested
+        # (Most filtering already done during parsing, but this catches edge cases)
+        if remove_nonstandard_chromosomes and not _is_standard_chromosome(chrom):
             continue
             
         arr = np.array(segs, dtype=object)
@@ -269,6 +428,20 @@ def parse_chain_to_segments(chain_path: str) -> Dict[str, Segments]:
         qsize = arr[:, 4].astype(np.int64)
         qrev = arr[:, 5].astype(bool)
         qname = arr[:, 6].astype(object)
+        
+        # If convert_special_chromosomes is True, qname already contains numeric values
+        # Otherwise, convert any remaining string special chromosomes in the array
+        if convert_special_chromosomes:
+            # Convert any remaining string special chromosomes in the array
+            mask_x = (qname == "X") | (qname == "x")
+            mask_y = (qname == "Y") | (qname == "y")
+            mask_m = (qname == "M") | (qname == "m") | (qname == "MT") | (qname == "mt")
+            if np.any(mask_x):
+                qname[mask_x] = 23
+            if np.any(mask_y):
+                qname[mask_y] = 24
+            if np.any(mask_m):
+                qname[mask_m] = 25
 
         # Sort segments by start to make sweeping deterministic
         order = np.argsort(t0, kind="mergesort")
@@ -284,6 +457,13 @@ def parse_chain_to_segments(chain_path: str) -> Dict[str, Segments]:
             t0=t0, t1=t1, q0=q0, score=score, qsize=qsize, qrev=qrev, qname=qname,
             bt0=bt0, bt1=bt1, bseg=bseg
         )
+    
+    if DEBUG_TIMING:
+        array_build_t1 = time.time()
+        parse_t1 = time.time()
+        print(f"  Array building & indexing: {array_build_t1 - array_build_t0:.3f}s")
+        print(f"  Total chain parsing: {parse_t1 - parse_t0:.3f}s")
+    
     return out
 
 
@@ -404,15 +584,25 @@ def _build_best_disjoint_cover(t0: np.ndarray, t1: np.ndarray, score: np.ndarray
 def liftover_df(
     df: pd.DataFrame,
     chain_path: str,
+    # Input column names
     chrom_col: str = "CHR",
     pos_col: str = "POS",
+    # Output column names
     out_chrom_col: str = "CHR_LIFT",
     out_pos_col: str = "POS_LIFT",
     out_strand_col: str = "STRAND_LIFT",
+    # Coordinate system options
     one_based_input: bool = True,
     one_based_output: bool = True,
+    # Filtering options
+    remove: bool = False,
     remove_unmapped: bool = False,
-    convert_special_chromosomes: bool = True,
+    remove_alternative_chromosomes: bool = False,
+    remove_different_chromosomes: bool = False,
+    remove_nonstandard_chromosomes: bool = False,
+    # Chromosome handling options
+    convert_special_chromosomes: bool = False,
+    ucsc_compatible: bool = False,
 ) -> pd.DataFrame:
     """
     Liftover genomic coordinates in a pandas DataFrame using a UCSC chain file.
@@ -480,14 +670,49 @@ def liftover_df(
         - True: Output positions will be 1-based (GWAS standard)
         - False: Output positions will be 0-based (BED format)
     
+    remove : bool, default False
+        Convenience option to filter all problematic mappings.
+        When True, sets all of the following to True:
+        - remove_unmapped (removes unmapped variants)
+        - remove_nonstandard_chromosomes (filters non-standard chromosomes)
+        - remove_alternative_chromosomes (filters alternative contigs)
+        - remove_different_chromosomes (filters inter-chromosomal mappings)
+        This provides a simple way to keep only clean, standard mappings with a single parameter.
+    
     remove_unmapped : bool, default False
         If True, remove variants that fail to map (unmapped variants).
         If False, keep unmapped variants with out_chrom_col=None, out_pos_col=-1.
     
-    convert_special_chromosomes : bool, default True
+    convert_special_chromosomes : bool, default False
         If True, convert special chromosomes to numeric values in output:
         - X → 23, Y → 24, M/MT → 25
         If False, keep special chromosomes as strings (X, Y, M, MT).
+        Default is False to match UCSC liftOver behavior.
+    
+    remove_alternative_chromosomes : bool, default False
+        If True, filter out chains where the target chromosome is non-standard (alternate contigs,
+        unplaced sequences, etc.) during chain parsing. This prevents mapping to these chromosomes.
+        Filtering is done during chain loading for efficiency, so no dataframe-level filtering is needed.
+        If False, allow mapping to non-standard chromosomes (matches UCSC liftOver default).
+    
+    remove_different_chromosomes : bool, default False
+        If True, filter out chains where the target chromosome differs from the query chromosome
+        during chain parsing. This prevents inter-chromosomal mappings (e.g., input is chr1 but
+        output would be chr2). Filtering is done during chain loading for efficiency.
+        If False, allow inter-chromosomal mappings (matches UCSC liftOver default).
+    
+    remove_nonstandard_chromosomes : bool, default False
+        If True, filter out chains involving non-standard chromosomes (alternate contigs,
+        unplaced sequences, etc.) during chain parsing. If False, include them during parsing,
+        allowing mapping to these chromosomes (matches UCSC liftOver default).
+    
+    ucsc_compatible : bool, default False
+        If True, explicitly enable UCSC liftOver-compatible behavior (same as defaults).
+        This parameter is now redundant since defaults already match UCSC liftOver, but is kept
+        for backward compatibility and explicit documentation. When True, ensures:
+        - remove_nonstandard_chromosomes=False
+        - remove_alternative_chromosomes=False
+        - remove_different_chromosomes=False
     
     Returns
     -------
@@ -503,6 +728,12 @@ def liftover_df(
         - out_chrom_col = None
         - out_pos_col = -1 or NaN
         - out_strand_col = None
+        
+        If remove_alternative_chromosomes=True, chains with non-standard target chromosomes
+        are filtered during chain loading, so variants cannot map to these chromosomes.
+        
+        If remove_different_chromosomes=True, chains with different target/query chromosomes
+        are filtered during chain loading, so inter-chromosomal mappings are prevented.
     
     Examples
     --------
@@ -543,8 +774,8 @@ def liftover_df(
     -----
     - Chain files use 0-based, half-open intervals [start, end)
     - Chromosome name normalization handles both "1" and "chr1" formats
-    - Special chromosomes are converted to numeric values in output by default:
-      X → 23, Y → 24, M/MT → 25
+    - Special chromosomes are kept as strings by default (X, Y, M, MT)
+      Use `convert_special_chromosomes=True` to convert to numeric (X→23, Y→24, M→25)
     - Reverse strand mappings convert coordinates to forward strand
     - Unmapped variants occur when positions fall outside alignment blocks
     - Multi-hit positions (positions that map to multiple target coordinates) are handled
@@ -552,143 +783,198 @@ def liftover_df(
       as a failure - the best mapping is always used.
     - This implementation is faster than the original liftover for large datasets
       due to vectorized operations and optimized indexing
-    - Non-standard chromosomes (alternate contigs) are filtered out during chain parsing
+    - Default behavior matches UCSC liftOver (allows non-standard chromosomes, alternate contigs)
+    - Use `remove=True` to filter out all problematic mappings (unmapped, non-standard, etc.)
     """
+    # ========================================================================
+    # Early returns and parameter setup
+    # ========================================================================
     if len(df) == 0:
         return df.copy()
     
-    segs_by_chr = parse_chain_to_segments(chain_path)
+    # Handle remove convenience option
+    if remove:
+        remove_unmapped = True
+        remove_nonstandard_chromosomes = True
+        remove_alternative_chromosomes = True
+        remove_different_chromosomes = True
+    
+    # Handle ucsc_compatible mode: explicitly set UCSC-compatible parameters
+    # (Note: defaults already match UCSC, but this ensures explicit control)
+    if ucsc_compatible:
+        remove_nonstandard_chromosomes = False
+        remove_alternative_chromosomes = False
+        remove_different_chromosomes = False
+    
+    # Setup debug timing
+    DEBUG_TIMING = os.environ.get('LIFTOVER_DEBUG_TIMING', '0') == '1'
+    if DEBUG_TIMING:
+        print(f"\n{'='*80}")
+        print(f"LIFTOVER PERFORMANCE DEBUG - Processing {len(df):,} rows")
+        print(f"{'='*80}")
+        total_start = time.time()
+    
+    # ========================================================================
+    # Parse chain file and build segment index
+    # ========================================================================
+    if DEBUG_TIMING:
+        t0 = time.time()
+    
+    segs_by_chr = parse_chain_to_segments(
+        chain_path,
+        remove_nonstandard_chromosomes=remove_nonstandard_chromosomes,
+        remove_alternative_chromosomes=remove_alternative_chromosomes,
+        remove_different_chromosomes=remove_different_chromosomes,
+        convert_special_chromosomes=convert_special_chromosomes
+    )
+    
+    if DEBUG_TIMING:
+        t1 = time.time()
+        print(f"Chain parsing: {t1-t0:.3f}s")
 
-    # Prepare output arrays
+    # ========================================================================
+    # Prepare input data and output arrays
+    # ========================================================================
+    if DEBUG_TIMING:
+        t0 = time.time()
+    
     n = len(df)
     out_chr = np.empty(n, dtype=object)
     out_pos = np.full(n, -1, dtype=np.int64)
     out_strand = np.empty(n, dtype=object)
-
+    
+    # Extract and normalize input data
     chroms = df[chrom_col].astype(str).to_numpy()
     pos = df[pos_col].to_numpy()
     pos0 = pos.astype(np.int64) - 1 if one_based_input else pos.astype(np.int64)
-
-    # Process per chromosome for speed
-    # (Using stable grouping by chromosome values present in df)
+    
+    if DEBUG_TIMING:
+        t1 = time.time()
+        print(f"Data preparation: {t1-t0:.3f}s")
+    
+    # ========================================================================
+    # Process coordinates per chromosome (vectorized lookup)
+    # ========================================================================
+    if DEBUG_TIMING:
+        t0 = time.time()
+        chrom_processing_times = {}
+    
     for chrom in pd.unique(chroms):
+        if DEBUG_TIMING:
+            chrom_t0 = time.time()
+        
+        # Get indices for this chromosome
         mask = (chroms == chrom)
         idxs = np.flatnonzero(mask)
         if idxs.size == 0:
             continue
-
-        # Normalize chromosome name for lookup (remove 'chr' prefix if present)
+        
+        # Normalize chromosome name and lookup segments
         chrom_norm = _normalize_chrom_name(chrom)
         segs = segs_by_chr.get(chrom_norm)
+        
         if segs is None:
-            # no mapping for this contig
+            # No mapping available for this chromosome
             out_chr[idxs] = None
             out_strand[idxs] = None
+            if DEBUG_TIMING:
+                chrom_t1 = time.time()
+                chrom_processing_times[str(chrom)] = chrom_t1 - chrom_t0
             continue
-
+        
+        # Sort positions for efficient binary search
         p = pos0[idxs]
         order = np.argsort(p, kind="mergesort")
         p_sorted = p[order]
         idxs_sorted = idxs[order]
-
-        # Vectorized interval lookup on best-disjoint cover
-        # When multiple segments overlap at a position (multi-hit), the disjoint cover
-        # already selects the highest-scoring segment, so we always use the best one.
-        # This ensures multi-hit positions are not treated as failures.
+        
+        # Vectorized interval lookup using disjoint cover
+        # Multi-hit positions automatically use highest-scoring segment
         j = np.searchsorted(segs.bt0, p_sorted, side="right") - 1
         ok = (j >= 0) & (p_sorted < segs.bt1[np.maximum(j, 0)])
-
-        # Fill unmapped
+        
+        # Mark unmapped positions
         out_chr[idxs_sorted[~ok]] = None
         out_strand[idxs_sorted[~ok]] = None
-
+        
+        # Process mapped positions
         if np.any(ok):
             jj = j[ok].astype(np.int64)
             seg_idx = segs.bseg[jj].astype(np.int64)
-
-            # offset from original segment start (not bt0)
+            
+            # Calculate offset from segment start
             off = p_sorted[ok] - segs.t0[seg_idx]
-
+            
+            # Initialize output position array
             qpos0 = np.empty(off.shape[0], dtype=np.int64)
             is_rev = segs.qrev[seg_idx]
-
-            # '+' strand
+            
+            # Forward strand: direct mapping
             plus = ~is_rev
             if np.any(plus):
                 qpos0[plus] = segs.q0[seg_idx[plus]] + off[plus]
-
-            # '-' strand: convert to forward coordinate base by base
-            # q_forward = qSize - 1 - (q_reverse)
+            
+            # Reverse strand: convert to forward coordinates
+            # Formula: q_forward = qSize - 1 - q_reverse
             if np.any(is_rev):
-                qpos0[is_rev] = segs.qsize[seg_idx[is_rev]] - 1 - (segs.q0[seg_idx[is_rev]] + off[is_rev])
-
+                qpos0[is_rev] = (
+                    segs.qsize[seg_idx[is_rev]] - 1 
+                    - (segs.q0[seg_idx[is_rev]] + off[is_rev])
+                )
+            
+            # Convert to output coordinate system (1-based or 0-based)
             qpos = qpos0 + 1 if one_based_output else qpos0
-
+            
+            # Store results
             out_pos[idxs_sorted[ok]] = qpos
-            # Normalize query chromosome names and filter out non-standard chromosomes
-            qname_values = segs.qname[seg_idx]
-            # Normalize qName (remove 'chr' prefix) for consistency
-            qname_normalized = np.array([_normalize_chrom_name(str(qn)) for qn in qname_values])
-            out_chr[idxs_sorted[ok]] = qname_normalized
+            out_chr[idxs_sorted[ok]] = segs.qname[seg_idx]
             out_strand[idxs_sorted[ok]] = np.where(is_rev, "-", "+")
-
+        
+        if DEBUG_TIMING:
+            chrom_t1 = time.time()
+            chrom_processing_times[str(chrom)] = chrom_t1 - chrom_t0
+    
+    if DEBUG_TIMING:
+        t1 = time.time()
+        main_loop_time = t1 - t0
+        print(f"Main processing loop: {main_loop_time:.3f}s")
+        if chrom_processing_times:
+            sorted_chroms = sorted(
+                chrom_processing_times.items(), 
+                key=lambda x: x[1], 
+                reverse=True
+            )
+            print(f"  Top 5 slowest chromosomes:")
+            for chrom, t in sorted_chroms[:5]:
+                print(f"    Chr{chrom}: {t:.3f}s")
+    
+    # ========================================================================
+    # Build output DataFrame
+    # ========================================================================
+    if DEBUG_TIMING:
+        t0 = time.time()
+    
     out = df.copy()
     out[out_chrom_col] = out_chr
     out[out_pos_col] = out_pos
     out[out_strand_col] = out_strand
     
-    # Count unmapped variants
+    # Count and optionally remove unmapped variants
     unmapped = out[out_pos_col].isna() | (out[out_pos_col] == -1)
     unmapped_count = unmapped.sum()
     mapped_count = len(out) - unmapped_count
     
-    # Remove unmapped variants if requested
     if remove_unmapped and unmapped_count > 0:
         out = out[~unmapped].copy()
     
-    # Update chromosome format if needed (strip 'chr' prefix and convert special chromosomes)
-    if convert_special_chromosomes and out_chrom_col in out.columns:
-        # Convert chromosome names to match expected format
-        # First, strip 'chr' prefix
-        out[out_chrom_col] = out[out_chrom_col].astype(str).str.replace("^chr", "", regex=True)
-        # Only convert special chromosomes for standard chromosomes (filter out alternate contigs)
-        # Check which values are standard chromosomes before converting
-        is_standard = out[out_chrom_col].apply(_is_standard_chromosome)
-        if is_standard.any():
-            # Convert special chromosomes to numeric: X→23, Y→24, M/MT→25
-            # Only apply to standard chromosomes
-            standard_mask = is_standard
-            out.loc[standard_mask, out_chrom_col] = out.loc[standard_mask, out_chrom_col].replace({
-                "X": "23", "x": "23", "chrX": "23", "chrx": "23",
-                "Y": "24", "y": "24", "chrY": "24", "chry": "24",
-                "M": "25", "m": "25", "MT": "25", "mt": "25", "chrM": "25", "chrm": "25", "chrMT": "25", "chrmt": "25"
-            })
-            
-            # Convert to numeric if possible (for special chromosomes 23, 24, 25)
-            # Use errors='coerce' to handle non-numeric chromosome names (alternate contigs, etc.)
-            # Only convert standard chromosomes that can be safely converted
-            try:
-                # First, identify which values are standard chromosomes and can be converted
-                chrom_series = out[out_chrom_col].astype(str)
-                # Check which are standard chromosomes
-                is_standard = chrom_series.apply(_is_standard_chromosome)
-                
-                # Only try to convert standard chromosomes
-                if is_standard.any():
-                    # For standard chromosomes, try to convert to numeric
-                    # This handles: "1"-"22" -> 1-22, "23"->23, "24"->24, "25"->25
-                    # Create a copy for conversion
-                    chrom_to_convert = chrom_series.copy()
-                    # Only convert standard chromosomes
-                    numeric_chrom = pd.to_numeric(chrom_to_convert, errors='coerce')
-                    # Only update values that are standard AND successfully converted (not NaN)
-                    valid_mask = is_standard & (~numeric_chrom.isna())
-                    if valid_mask.any():
-                        out.loc[valid_mask, out_chrom_col] = numeric_chrom[valid_mask].astype('Int64')
-                # Non-standard chromosomes (alternate contigs, etc.) remain as strings
-            except Exception:
-                # If conversion fails entirely, keep original values as strings
-                pass
+    if DEBUG_TIMING:
+        t1 = time.time()
+        print(f"Output DataFrame construction: {t1-t0:.3f}s")
+        total_end = time.time()
+        total_time = total_end - total_start
+        print(f"{'='*80}")
+        print(f"TOTAL TIME: {total_time:.3f}s ({len(df)/total_time:,.0f} rows/sec)")
+        print(f"{'='*80}\n")
     
     return out
 

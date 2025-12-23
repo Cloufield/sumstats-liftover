@@ -1,12 +1,12 @@
 """
-Example usage of liftover_df with hg19ToHg38.over.chain.gz
+Example usage of sumstats-liftover with built-in chain files.
 
 This example demonstrates lifting over genomic coordinates from hg19 to hg38
-using the provided dataframe format.
+using built-in chain files, eliminating the need to download chain files separately.
 """
 
 import pandas as pd
-from sumstats_liftover import liftover_df
+from sumstats_liftover import liftover_df, get_chain_path, list_chain_files
 
 # Example dataframe with hg19 positions
 df = pd.DataFrame({
@@ -28,10 +28,20 @@ print("Original dataframe (hg19 coordinates):")
 print(df)
 print("\n" + "="*80 + "\n")
 
-# Perform liftover from hg19 to hg38
+# Show available built-in chain files
+print("Available built-in chain files:")
+chain_files = list_chain_files()
+for name, description in chain_files.items():
+    print(f"  {name}: {description}")
+print("\n" + "="*80 + "\n")
+
+# Perform liftover from hg19 to hg38 using built-in chain file
+chain_path = get_chain_path("hg19ToHg38")
+print(f"Using built-in chain file: {chain_path}\n")
+
 result = liftover_df(
     df,
-    chain_path="hg19ToHg38.over.chain.gz",
+    chain_path=chain_path,
     chrom_col="CHR",
     pos_col="POS",
     out_chrom_col="CHR_LIFT",

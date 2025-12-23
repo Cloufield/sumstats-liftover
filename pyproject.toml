@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "sumstats-liftover"
-version = "0.2.0"
+version = "1.0.0"
 description = "Fast chain-based liftover for pandas DataFrames"
 readme = "README.md"
 requires-python = ">=3.8"
@@ -14,7 +14,7 @@ authors = [
 ]
 keywords = ["liftover", "genomics", "bioinformatics", "pandas", "chain-file"]
 classifiers = [
-    "Development Status :: 3 - Alpha",
+    "Development Status :: 5 - Production/Stable",
     "Intended Audience :: Science/Research",
     "Topic :: Scientific/Engineering :: Bio-Informatics",
     "Programming Language :: Python :: 3",
@@ -49,6 +49,7 @@ where = ["src"]
 
 [tool.setuptools.package-data]
 "sumstats_liftover" = ["*.chain.gz", "*.chain"]
+"sumstats_liftover.data" = ["*.chain.gz"]
 
 [tool.pytest.ini_options]
 testpaths = ["."]
