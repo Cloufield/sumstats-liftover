@@ -2,6 +2,21 @@
 
 All notable changes to this project will be documented in this file.
 
+## [1.1.0] - 2025-12-25
+
+### Added
+- Support for tab-separated chain files (in addition to space-separated)
+  - Automatically detects and handles both formats
+  - Tested with grch38-chm13v2.chain and other tab-separated chain files
+- Support for chain files with comment headers
+  - Automatically skips comment lines (starting with `#`) and other non-chain header lines
+  - Allows chain files with metadata or comments at the beginning
+
+### Fixed
+- Chain file parser now correctly handles chain headers with tabs instead of spaces
+- Improved compatibility with chain files from various sources (UCSC, T2T, etc.)
+- Chain file parser now gracefully handles comment headers and other non-chain lines
+
 ## [1.0.0] - 2025-12-23
 
 ### Added

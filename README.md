@@ -77,6 +77,8 @@ result = liftover_df(df, chain_path="/path/to/custom.chain.gz")
 
 UCSC chain files: [Download](https://hgdownload.soe.ucsc.edu/downloads.html)
 
+**Note**: The parser supports both space-separated and tab-separated chain files, and automatically handles comment headers (lines starting with `#`) at the beginning of chain files.
+
 ### Filtering Options
 
 **Default behavior** matches UCSC liftOver (allows non-standard chromosomes, alternate contigs, inter-chromosomal mappings).

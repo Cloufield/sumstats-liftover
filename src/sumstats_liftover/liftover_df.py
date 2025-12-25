@@ -246,8 +246,11 @@ def parse_chain_to_segments(
 
     Chain format details:
       - 0-based, half-open intervals [start, end)
-      - header includes qStrand; if '-', query coordinates are on reverse strand
+      - Header includes qStrand; if '-', query coordinates are on reverse strand
         (UCSC notes you may convert to forward by qStartF=qSize-qEnd, qEndF=qSize-qStart).
+      - Supports both space-separated and tab-separated chain headers
+      - Automatically skips comment lines (starting with `#`) and other non-chain lines
+        at the beginning of the file
     
     Parameters
     ----------
@@ -296,10 +299,19 @@ def parse_chain_to_segments(
                 line = fh.readline()
                 continue
 
-            if not line.startswith("chain "):
-                raise ValueError(f"Unexpected line (expected chain header): {line[:80]}")
+            # Skip comment lines (starting with #) and other non-chain header lines
+            # Some chain files may have comment headers at the beginning
+            if line.startswith("#") or (not line.startswith("chain ") and not line.startswith("chain\t")):
+                # Skip comment lines and other non-chain lines
+                # This allows chain files with comment headers
+                line = fh.readline()
+                continue
+
+            # Handle both space-separated and tab-separated chain headers
+            # At this point, line should start with "chain " or "chain\t"
 
             # chain score tName tSize tStrand tStart tEnd qName qSize qStrand qStart qEnd id
+            # split() handles both spaces and tabs
             parts = line.split()
             if len(parts) != 13:
                 raise ValueError(f"Bad chain header with {len(parts)} fields: {line}")
