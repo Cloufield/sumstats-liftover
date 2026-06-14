@@ -196,6 +196,8 @@ Main function for lifting over genomic coordinates.
 
 ## How It Works
 
+![Liftover workflow](docs/liftover_workflow.png)
+
 The library builds a **disjoint interval cover** from UCSC chain files by selecting the highest-scoring segment at each position when overlaps occur. This enables O(log n) coordinate lookup using binary search.
 
 **Algorithm:**
